@@ -22,7 +22,7 @@ else:
 # Clever redirect URIs must be preregistered on your developer dashboard.
 # If using the default PORT set above, make sure to register "http://localhost:2587/oauth"
 REDIRECT_URI = 'http://localhost:{port}/oauth'.format(port=PORT)
-CLEVER_OAUTH_URL = 'https://clever.com/oauth/tokens'
+CLEVER_OAUTH_URL = 'https://clever.com/oauth'
 CLEVER_API_BASE = 'https://api.clever.com'
 
 # Use the bottle session middleware to store an object to represent a "logged in" state.
@@ -67,16 +67,36 @@ def oauth():
         'Content-Type': 'application/json',
     }
 
-    # Don't forget to handle 4xx and 5xx errors!
-    response = requests.post(CLEVER_OAUTH_URL, data=json.dumps(payload), headers=headers).json()
+    # Get Token
+    try:
+        response = requests.post(CLEVER_OAUTH_URL + '/tokens', data=json.dumps(payload), headers=headers).json()        
+
+    except requests.exceptions.RequestException as e:
+        return e
+            
     token = response['access_token']
 
     bearer_headers = {
         'Authorization': 'Bearer {token}'.format(token=token)
     }
 
-    # Don't forget to handle 4xx and 5xx errors!
-    result = requests.get(CLEVER_API_BASE + '/me', headers=bearer_headers).json()
+    # Validate the returned token
+    try:
+        result = requests.get(CLEVER_OAUTH_URL + '/tokeninfo', headers=bearer_headers).json()       
+
+        if result['client_id'] != CLIENT_ID:
+            return "Returned client_id does not match app client_id. Token is invalid."
+
+    except requests.exceptions.RequestException as e:
+        return e        
+    
+    # Determine who the token is for
+    try:    
+        result = requests.get(CLEVER_API_BASE + '/me', headers=bearer_headers).json()
+
+    except requests.exceptions.RequestException as e:
+        return e
+    
     data = result['data']
 
     # Only handle student logins for our app (other types include teachers and districts)
@@ -84,20 +104,21 @@ def oauth():
         return template ("You must be a student to log in to this app but you are a {{type}}.", type=data['type'])
     else:
         if 'name' in data: #SIS scope
-            nameObject = data['name']            
+            nameObject = data['name']
         else:
-            
+        
             #For student scopes, we'll have to take an extra step to get name data.
             studentId = data['id']
             student = requests.get(CLEVER_API_BASE + '/v1.1/students/{studentId}'.format(studentId=studentId), 
                 headers=bearer_headers).json()
-            
-            nameObject = student['data']['name']
         
+            nameObject = student['data']['name']
+    
         session = request.environ.get('beaker.session')
         session['nameObject'] = nameObject
 
         redirect('/app')
+        
 
 # Our application logic lives here and is reserved only for users we've authenticated and identified.
 @route('/app')
